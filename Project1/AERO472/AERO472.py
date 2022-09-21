@@ -9,6 +9,8 @@ Design of a wing and tail for minimizing fuel cost
 Mission occurs at 12,000ft 
 """
 
+import package.Subsystems.Sizing as size
 
-import AERO472 as p
-p.test()
+
+size.weight()
+
