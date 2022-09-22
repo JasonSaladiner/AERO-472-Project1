@@ -10,7 +10,9 @@ Mission occurs at 12,000ft
 """
 
 import package.Subsystems.Sizing as size
+from package import given
 
 
-size.weight()
+
+#print(size.endurance_relation(2*3600,given["spcf"],given["Eprop"],vel = ))
 

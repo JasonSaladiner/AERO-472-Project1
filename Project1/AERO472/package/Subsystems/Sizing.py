@@ -10,6 +10,7 @@ def range_relation(R = None,vel = None,LoD = None,spcf= None,wiOverwf= None):
 	"""
 	Use the	Breguet Range equation for this relation.
 	if the plane is a piston prop, pass prop efficincy instead of velocity
+	**Ensure that values units properelly cancel**
 	"""
 		
 		
@@ -34,8 +35,31 @@ def range_relation(R = None,vel = None,LoD = None,spcf= None,wiOverwf= None):
 		return 1 - exp(-x)
 
 
+def endurance_relation(E = None, spcf = None, eff = None, vel = None, LoD = None, wiOverwf = None):
+	"""
+	Using the loiter endurance equaiton
+	this is true for a piston prop engine. 
+	"""
 
+	import sys
+	from math import log,exp
+	#count of the number of None Types
+	cNone = [E,spcf,LoD,wiOverwf].count(None)
 	
+	if cNone != 1:
+		sys.exit("Incorrect number of None Variables in AERO472.Sizing.endurance_relations. Make sure to pass only one None for variable of interest")
+
+	if E == None:
+		return 1 / spcf * LoD * log(wiOverwf)
+	elif spcf == None:
+		return 1 / E * LoD * log(wiOverwf)
+	elif LoD == None:
+		return E * spcf / log(wiOverwf)
+	elif wiOverwf == None:
+		x = E * spcf * vel / LoD / eff
+		print(x)
+		return 1 - exp(-x)
+
 
 
 #find initial weight guess woi
