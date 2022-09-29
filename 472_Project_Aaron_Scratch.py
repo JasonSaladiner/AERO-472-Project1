@@ -129,7 +129,7 @@ def power(Wo, S_wing, AR_wing):
     Cdo = C_f*S_wet/S_wing
     V_climb = 1.2*V_stall
     q_climb = .5*SL_density*V_climb**2
-    P_max = (Wo*V_climb/n_prop)*(Cdo*q_climb/(Wo/S_wing) + (Wo/S_wing)/(np.pi*e*AR_wing*q_climb) + RoC/V_climb)/(hp*32.1741) # gonna want to check this, just kinda guessed the hp term should have a gravity next to it
+    P_max = (Wo*V_climb/n_prop)*(Cdo*q_climb/(Wo/S_wing) + (Wo/S_wing)/(np.pi*e*AR_wing*q_climb) + RoC/V_climb)/(hp*32.1741) # gonna want to check this, just kinda guessed the hp term should have a gravity next to it, normally power is mass*length^2/time^3 but should this be lbm or lbf?? Adding that g = 32 bit changes it to lbm, trying otherwise yields huge airplane
     #print(P_max)
     return P_max, L
 
