@@ -2,8 +2,9 @@
   "ExpandedNodes": [
     "",
     "\\AERO472",
-    "\\AERO472\\Subsystems"
+    "\\AERO472\\package",
+    "\\AERO472\\package\\Subsystems"
   ],
-  "SelectedNode": "\\AERO472\\Subsystems\\Airfoil.py",
+  "SelectedNode": "\\AERO472\\package\\Subsystems\\Sizing.py",
   "PreviewInSolutionExplorer": false
 }
