@@ -10,8 +10,11 @@ hp = 550
 nm = 6076
 
 # totally made up, is actually dependent on We, Wpp, Wf 3168
-Wo = 2131.35
+Wo = 2370
 Wpp = 1000
+e = .85
+AR_wing = 6  # just a good guess
+t_c = 1
 
 
 def We(Wo):
@@ -19,11 +22,11 @@ def We(Wo):
     return val
 
 
-def Wfo(Wo, isRefined):
+def Wfo(Wo, e, isRefined):
     if isRefined:
         tail_dimensions, wing_dimensions = wingAndTailSizing()[0:5], wingAndTailSizing()[5:]
 
-        P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2])
+        P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2], e)
         W_empty = refinedEmptyWeight(Wo, minStallArea(Wo), wing_dimensions[2], tail_dimensions[4], P_max, L)
     elif not isRefined:
         W_empty = We(Wo)
@@ -41,11 +44,11 @@ def minStallArea(Wo):
     return S_wing
 
 
-def initialWeighing(Wo, isRefined):
+def initialWeighing(Wo, isRefined, e):
     if isRefined:
         tail_dimensions, wing_dimensions = wingAndTailSizing()[0:5], wingAndTailSizing()[5:]
 
-        P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2])
+        P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2], e)
         W_empty = refinedEmptyWeight(Wo, minStallArea(Wo), wing_dimensions[2], tail_dimensions[4], P_max, L)
     elif not isRefined:
         W_empty = We(Wo)
@@ -63,12 +66,18 @@ def initialWeighing(Wo, isRefined):
     S_wing = minStallArea(Wo)
     q_cruise = .5*alt_density*V_cruise**2
     CL_cruise1 = W1/(q_cruise*S_wing)
-    CD_cruise1 = CL_cruise1/L_D_Cruise
+    if isRefined:
+        CD_cruise1 = refinedDrag(CL_cruise1, S_wing, L)
+    elif not isRefined:
+        CD_cruise1 = CL_cruise1 / L_D_Cruise
     #print(CL_cruise1)
     x = (R * C) / (n_prop * L_D_Cruise)
     W2 = W1 / np.exp(x)  # Weight at end of cruise phase
     CL_cruise2 = W2/(q_cruise*S_wing)
-    CD_cruise2 = CL_cruise2/L_D_Cruise
+    if isRefined:
+        CD_cruise2 = refinedDrag(CL_cruise2, S_wing, L)
+    elif not isRefined:
+        CD_cruise2 = CL_cruise2/L_D_Cruise
     #print(CL_cruise2)
     Wf2 = W2 - Wpp - W_empty  # Weight of fuel left at end of cruise
     # print(Wf2)
@@ -77,14 +86,20 @@ def initialWeighing(Wo, isRefined):
     E = 7200  # seconds, is endurance
     L_D_loiter = 10
     CL_loiter1 = .8  # guess
-    CD_loiter1 = CL_loiter1/L_D_loiter
+    if isRefined:
+        CD_loiter1 = refinedDrag(CL_loiter1, S_wing, L)
+    elif not isRefined:
+        CD_loiter1 = CL_loiter1 / L_D_loiter
     q_loiter = W2 / (S_wing * CL_loiter1)
     #print(cruise())
     V_loiter = np.sqrt(2 * q_loiter / alt_density)
     x = E * C * V_loiter / (n_prop * L_D_loiter)
     W3 = W2 / np.exp(x)  # weight at end of loiter
     CL_loiter2 = W3/(q_loiter*S_wing)
-    CD_loiter2 = CL_loiter2/L_D_loiter
+    if isRefined:
+        CD_loiter2 = refinedDrag(CL_loiter2, S_wing, L)
+    elif not isRefined:
+        CD_loiter2 = CL_loiter2 / L_D_loiter
     #print(CL_loiter2)
     Wf3 = W3 - Wpp - W_empty
     # print(Wf3) # psf
@@ -93,14 +108,13 @@ def initialWeighing(Wo, isRefined):
     W4 = .99 * W3
     #print(loiter())
     Wf4 = W4 - Wpp - W_empty
-    final_fuel = 100*Wf4 / Wfo(Wo, isRefined)
+    final_fuel = 100*Wf4 / Wfo(Wo, e, isRefined)
     return W1, W2, W3, Wf4, final_fuel, CL_cruise1, CL_cruise2, CD_cruise1, CD_cruise2, CL_loiter1, CL_loiter2, CD_loiter1, CD_loiter2
 
 
 def wingAndTailSizing():
     CHT = .7
     S_wing = minStallArea(Wo)
-    AR_wing = 6 # just a good guess
     b_wing = np.sqrt(AR_wing*S_wing)
     c_bar = S_wing/b_wing # assuming a rectangular wing here
     l_tail = .5*b_wing # totally made up relationship, just a guess
@@ -114,14 +128,12 @@ def wingAndTailSizing():
     return S_tail, l_tail, b_tail, c_tail, AR_tail, b_wing, c_bar, AR_wing
 
 
-def power(Wo, S_wing, AR_wing):
-    e = .85
+def power(Wo, S_wing, AR_wing, e):
     RoC = 400 / 60
     V_stall = 75 * 1.6878
     n_prop = .85
     # need to get Cdo
     C_f = .0045
-    t_c = 1
     L = 4.47*Wo**.23
     #L = S_wing/wingAndTailSizing()[5]
     S_exposed = .8 * S_wing
@@ -129,7 +141,7 @@ def power(Wo, S_wing, AR_wing):
     Cdo = C_f*S_wet/S_wing
     V_climb = 1.2*V_stall
     q_climb = .5*SL_density*V_climb**2
-    P_max = (Wo*V_climb/n_prop)*(Cdo*q_climb/(Wo/S_wing) + (Wo/S_wing)/(np.pi*e*AR_wing*q_climb) + RoC/V_climb)/(hp*32.1741) # gonna want to check this, just kinda guessed the hp term should have a gravity next to it, normally power is mass*length^2/time^3 but should this be lbm or lbf?? Adding that g = 32 bit changes it to lbm, trying otherwise yields huge airplane
+    P_max = (Wo*V_climb/n_prop)*(Cdo*q_climb/(Wo/S_wing) + (Wo/S_wing)/(np.pi*e*AR_wing*q_climb) + RoC/V_climb)/(hp) # gonna want to check this, just kinda guessed the hp term should have a gravity next to it
     #print(P_max)
     return P_max, L
 
@@ -147,10 +159,21 @@ def refinedEmptyWeight(Wo, S_wing, AR_wing, AR_tail, P_max, L):
     return We
 
 
+def refinedDrag(CL, S_wing, L):
+    C_f = .0045
+    S_exposed = .8 * S_wing
+    S_wet = 2*(1 + .2*t_c)*S_exposed + 3.1*L**1.3
+    Cdo = C_f*S_wet/S_wing
+    Cdi = (CL**2)/(np.pi*e*AR_wing)
+    Cd = Cdo + Cdi
+
+    return Cd
+
+
 isRefined = False
-end_fuel_weight, fuel_percent, cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end = initialWeighing(Wo, isRefined)[3:]
+end_fuel_weight, fuel_percent, cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end = initialWeighing(Wo, isRefined, e)[3:]
 tail_dimensions, wing_dimensions = wingAndTailSizing()[0:5], wingAndTailSizing()[5:]
-P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2])
+P_max, L = power(Wo, minStallArea(Wo), wing_dimensions[2], e)
 We_revised = refinedEmptyWeight(Wo, minStallArea(Wo), wing_dimensions[2], tail_dimensions[4], P_max, L)
 df1 = pd.DataFrame([cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end])
 df1.index = ['cl_cruise_start', 'cl_cruise_end', 'cd_cruise_start', 'cd_cruise_end', 'cl_loiter_start', 'cl_loiter_end', 'cd_loiter_start', 'cd_loiter_end']
@@ -160,8 +183,8 @@ print(f'Pre-revision:\n'
 
 # not changing old parameters but updating only the fuel related terms and carrying through
 isRefined = True
-refined_end_fuel, refined_fuel_percent, cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end = initialWeighing(Wo, isRefined)[3:]
-df2 = pd.DataFrame([Wo, We(Wo), Wpp, Wfo(Wo, isRefined=False), end_fuel_weight, fuel_percent, minStallArea(Wo), wing_dimensions[0], wing_dimensions[1], wing_dimensions[2], tail_dimensions[0], tail_dimensions[1], tail_dimensions[2], tail_dimensions[3], tail_dimensions[4], We_revised, Wfo(Wo, isRefined), refined_end_fuel, refined_fuel_percent])
+refined_end_fuel, refined_fuel_percent, cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end = initialWeighing(Wo, isRefined, e)[3:]
+df2 = pd.DataFrame([Wo, We(Wo), Wpp, Wfo(Wo, e, isRefined=False), end_fuel_weight, fuel_percent, minStallArea(Wo), wing_dimensions[0], wing_dimensions[1], wing_dimensions[2], tail_dimensions[0], tail_dimensions[1], tail_dimensions[2], tail_dimensions[3], tail_dimensions[4], We_revised, Wfo(Wo, e, isRefined), refined_end_fuel, refined_fuel_percent])
 df2.index = ['Wo', 'We', 'Wpp', 'Wfo', 'Wf4', 'Percent fuel reserve', 'S_wing', 'b_wing', 'c_bar', 'AR_wing', 'S_tail', 'l_tail', 'b_tail', 'c_tail', 'AR_tail', 'Revised We', 'Refined Wfo', 'Refined Wf4', 'Refined percent fuel reserve']
 
 df3 = pd.DataFrame([cl_cruise_start, cl_cruise_end, cd_cruise_start, cd_cruise_end, cl_loiter_start, cl_loiter_end, cd_loiter_start, cd_loiter_end])
