@@ -1,6 +1,8 @@
 # Constants & Objectives
 import numpy as np
+import scipy.optimize
 import scipy.optimize as sco
+from dataclasses import dataclass
 
 cruise_dist_nm = 300  # Nautical miles
 cruise_speed_knots = 150  # Knots
@@ -148,6 +150,27 @@ def get_loiter_speed_mph(endurance_hrs, eta_prop, C_lbf_per_hrhp, initial_weight
     return optimal_v.x, optimal_v.fun
 
 
+@dataclass
+class FuelBurn:
+    total_fuel_weight: float = 0
+    taxi_takeoff_fuel: float = 0
+    cruise_fuel: float = 0
+    loiter_fuel: float = 0
+    landing_fuel: float = 0
+
+    w0: float = 0  # Initial
+    w1: float = 0  # Post taxi-takeoff
+    w2: float = 0  # Post cruise
+    w3: float = 0  # Post endurance
+    w4: float = 0  # Post landing
+
+    CL_cruise: float = 0
+    LoverD_cruise: float = 0
+    loiter_speed: float = 0
+    CL_loiter: float = 0
+    LoverD_loiter: float = 0
+
+
 def fuel_weight(dry_weight_lbf, cd, sref_ft2, CLMax,
                 req_range_miles=cruise_dist_nm * 1.1508,
                 eta_prop=eta_propeller,
@@ -156,48 +179,73 @@ def fuel_weight(dry_weight_lbf, cd, sref_ft2, CLMax,
                 density_loiter_sf3=cruise_density_slugft3,
                 C=C_lbf_per_hrhp,
                 ext_res=False):
-    fw_k = 0
+    burndown = FuelBurn()
+    burndown.total_fuel_weight = 0
     while True:
-        w0 = dry_weight_lbf + fw_k
+        burndown.w0 = dry_weight_lbf + burndown.total_fuel_weight
         # 0 -> 1: taxi, takeoff, ...
-        fuel_01_lbf = fuel_consumption_initial * w0
-        w1 = w0 - fuel_01_lbf
+        burndown.taxi_takeoff_fuel = fuel_consumption_initial * burndown.w0
+        burndown.w1 = burndown.w0 - burndown.taxi_takeoff_fuel
         # 1 -> 2: range
-        CL_cruise = required_clArea(cruise_density_slugft3, cruise_speed_knots, w1) / sref_ft2
-        loverd_cruise = CL_cruise / cd(CL_cruise)
-        fuel_12_lbf = fuel_cost_range_lbf(req_range_miles, eta_prop, C, loverd_cruise, w1)
-        w2 = w1 - fuel_12_lbf
+        burndown.CL_cruise = required_clArea(cruise_density_slugft3, cruise_speed_knots, burndown.w1) / sref_ft2
+        burndown.LoverD_cruise = burndown.CL_cruise / cd(burndown.CL_cruise)
+        burndown.cruise_fuel = fuel_cost_range_lbf(req_range_miles, eta_prop, C, burndown.LoverD_cruise, burndown.w1)
+        burndown.w2 = burndown.w1 - burndown.cruise_fuel
         # 2 -> 3: endurance
         # ls_mph, fuel_23_lbf = get_loiter_speed_mph(endurance_hours, eta_prop, C, w2, min_speed_mph, cd,
         #                                            density_loiter_sf3, sref_ft2)
-        ls_mph = required_airspeed_mph(density_loiter_sf3, CLMax * sref_ft2, w2)
-        CL_endurance = CLMax
-        LoverD_endurance = CL_endurance / cd(CL_endurance)
-        fuel_23_lbf = fuel_cost_endurance_lbf(endurance_hours, eta_prop, ls_mph, C, LoverD_endurance, w2)
-        w3 = w2 - fuel_23_lbf
+
+        ls_mph = required_airspeed_mph(density_loiter_sf3, CLMax * sref_ft2, burndown.w2)
+
+        def min_fuel_fxn(v_mph):
+            cl_k = required_clArea(density_loiter_sf3, v_mph*0.868976, burndown.w2) / sref_ft2
+            # print("V: {} mph -> CL: {}".format(v_mph, cl_k))
+            ld_k = cl_k / cd(cl_k)
+            return fuel_cost_endurance_lbf(endurance_hours, eta_prop, v_mph, C, ld_k, burndown.w2)
+
+        burndown.loiter_speed = scipy.optimize.minimize_scalar(min_fuel_fxn, bounds=[ls_mph, ls_mph * 5],
+                                                               method="bounded").x
+
+        burndown.CL_loiter = required_clArea(density_loiter_sf3, burndown.loiter_speed*0.868976, burndown.w2) / sref_ft2
+        burndown.LoverD_loiter = burndown.CL_loiter / cd(burndown.CL_loiter)
+        burndown.loiter_fuel = fuel_cost_endurance_lbf(endurance_hours, eta_prop, burndown.loiter_speed,
+                                                       C, burndown.LoverD_loiter, burndown.w2)
+
+        burndown.w3 = burndown.w2 - burndown.loiter_fuel
         # 3 -> 4: landing
-        fuel_34_lbf = fuel_consumption_landing * w0
-        w4 = w3 - fuel_34_lbf
+        burndown.landing_fuel = fuel_consumption_landing * burndown.w0
+        burndown.w4 = burndown.w3 - burndown.landing_fuel
         # 4: 6% fuel reserve
-        fuel_extra = fw_k * extra_fuel_pct
-        fuel_actual = fuel_01_lbf + fuel_12_lbf + fuel_23_lbf + fuel_34_lbf + fuel_extra
-        offset = fw_k - fuel_actual
+        fuel_extra = burndown.total_fuel_weight * extra_fuel_pct
+        fuel_actual = burndown.taxi_takeoff_fuel + burndown.cruise_fuel + burndown.loiter_fuel +\
+                      burndown.landing_fuel + fuel_extra
+        offset = burndown.total_fuel_weight - fuel_actual
         if abs(offset) < 10 ** -5:
             if ext_res:
-                return fw_k, ls_mph, loverd_cruise, LoverD_endurance
-            return fw_k, ls_mph
-        fw_k -= offset
+                return burndown
+            return burndown.total_fuel_weight, burndown.loiter_speed
+        burndown.total_fuel_weight -= offset
 
 
 def required_clArea(rho_slugft3, v_min_knots, lift_lbf):
-    v = v_min_knots * 1.68781
-    q = 0.5 * rho_slugft3 * (v ** 2)
-    return lift_lbf / q
+    # v = v_min_knots * 1.68781
+    # q = 0.5 * rho_slugft3 * (v ** 2)
+    # return lift_lbf / q
+    rho = 515.378819 * rho_slugft3
+    v = v_min_knots * 0.514444
+    q = 0.5 * rho * v * v
+    F = lift_lbf * 4.44822
+    return (F / q) * 10.7639
 
 
 def required_airspeed_mph(rho_slugft3, CLArea, lift_lbf):
-    v = np.sqrt(2 * lift_lbf / (rho_slugft3 * CLArea))
-    return v
+    # v = np.sqrt(2 * lift_lbf / (rho_slugft3 * CLArea))
+    # return v
+    F = lift_lbf * 4.44822
+    rho = 515.378819 * rho_slugft3
+    cla = CLArea / 10.7639
+    return np.sqrt((2 * F) / (rho * cla)) * 2.23694
+
 
 
 def required_power(initial_weight_lbf, wing_area_ft2, AR, oswald_e, CD0):

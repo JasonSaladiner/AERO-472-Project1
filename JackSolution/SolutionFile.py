@@ -1,6 +1,8 @@
+import matplotlib.pyplot as plt
 import numpy as np
 
 from ConstraintsAndMethods import *
+
 
 def interpolate(x, x_list, y_list):
     for i in range(1, len(x_list)):
@@ -28,7 +30,7 @@ class Wing:
 
     def __init__(self):
         self.AR = 4
-        self.e = 0.8
+        self.e = 0.97
         self.area = 10
         self.airfoil = WingFoil()
 
@@ -77,6 +79,7 @@ class Plane:
         self.wetted_area = 0
         self.wetted_area_nowings = 0
         self.oswald_e = 0.8
+        self.oswald_cd0 = 0
 
         self.fuse_weight = 0
         self.wing_weight = 0
@@ -125,7 +128,9 @@ class Plane:
             mw_span = self.mw.span()
             flap_span = self.flap_pct * mw_span
 
-            self.power_req = required_power(total_weight_lbf, self.mw.area, self.mw.AR, self.oswald_e, self.cd0())
+            self.oswald_cd0, self.oswald_e = self.compute_oswald()
+            # print(self.oswald_e)
+            self.power_req = required_power(total_weight_lbf, self.mw.area, self.mw.AR, self.oswald_e, self.oswald_cd0)
             self.fuse_len = vehicle_len_ft(total_weight_lbf)
 
             self.wing_weight = weight_wing_lbf(total_weight_lbf, self.mw.area, self.mw.AR)
@@ -146,10 +151,64 @@ class Plane:
                                                            self.mw.clalpha(),
                                                            self.mw.area, self.tail_vol_coeff, full=True)
             self.hs_x_ac = self.fuse_len  # Assumption; see SM calcs
-            self.wetted_area = wetted_fuselage_and_vtail_area_ftsquared(self.fuse_len) + self.mw.wetted_area() \
-                               + self.hs.wetted_area()
+
+            # Check minimum, revise:
+            if (self.static_margin_calc(0) - self.static_margin) < -(10 ** -5):
+                self.mw_x_ac, self.hs.area, self.x_cg_ft, \
+                self.x_ac_ft = compute_main_wing_pos_from_nose(self.static_margin, self.fuse_len,
+                                                               self.engine_weight + self.fuse_weight + self.tail_weight,
+                                                               self.wing_weight + self.flap_weight,
+                                                               0,
+                                                               self.mw.mac(),
+                                                               self.eta_tail, self.hs.clalpha(), self.kappa_tail,
+                                                               0,
+                                                               self.mw.clalpha(),
+                                                               self.mw.area, self.tail_vol_coeff, full=True)
+                self.hs_x_ac = self.fuse_len  # Assumption; see SM calcs
+
+                # Check max again:
+                if (self.static_margin_calc(fuel_weight) - self.static_margin) < -(10 ** -5):
+                    print((self.static_margin_calc(fuel_weight) - self.static_margin))
+                    raise ValueError("Cannot calculate acceptable wing positions for {} static margin! Got {} empty, "
+                                     "{} full".format(self.static_margin, self.static_margin_calc(0),
+                                                      self.static_margin_calc(fuel_weight)))
+
+            self.wetted_area = wetted_fuselage_and_vtail_area_ftsquared(self.fuse_len)
+
             last_cl_max = cl_max_k
             cl_max_k = self.CLmax()
+
+    def static_margin_calc(self, w_fuel_lbf, ac_and_cg=False):
+        x_cg_k_from_nose = x_cg_from_nose_ft(self.fuse_len, self.mw_x_ac, self.fuse_weight, self.engine_weight,
+                                             self.tail_weight, w_fuel_lbf, self.wing_weight, self.flap_weight)
+        ac_k_from_nose = aerodynamic_center_approx(self.eta_tail, self.hs_x_ac - self.mw_x_ac,
+                                                   self.hs.clalpha(), self.kappa_tail,
+                                                   self.hs.area, 0, self.mw.clalpha(), self.mw.area) + self.mw_x_ac
+        if ac_and_cg:
+            return (ac_k_from_nose - x_cg_k_from_nose) / self.mw.mac(), x_cg_k_from_nose, ac_k_from_nose
+        return (ac_k_from_nose - x_cg_k_from_nose) / self.mw.mac()
+
+    def static_margin_fuel_burndown(self, burndown: FuelBurn):
+        fuel_usage = [burndown.taxi_takeoff_fuel, burndown.cruise_fuel, burndown.loiter_fuel, burndown.landing_fuel]
+        fuel_weights = [burndown.total_fuel_weight]
+        for fw in fuel_usage:
+            fuel_weights.append(fuel_weights[-1] - fw)
+        sm_results = [self.static_margin_calc(wf_k, ac_and_cg=True) for wf_k in fuel_weights]
+        return [v[0] for v in sm_results], fuel_weights, [v[1] for v in sm_results], [v[2] for v in sm_results]
+
+    def compute_oswald(self, plot=False):
+        cl_data = np.linspace(0, self.CLmax(), 100)
+        cd_data = [self.CD(cl_k) for cl_k in cl_data]
+        A = np.array([[1, (cl**2) / (self.mw.AR * np.pi)] for cl in cl_data])
+        b = np.array([[cd] for cd in cd_data])
+        cd0, oneoverebar = list((np.linalg.inv(A.T @ A) @ (A.T @ b)).T[0])
+        ebar = 1 / oneoverebar
+        if plot:
+            check_f = lambda cl: cd0 + (cl ** 2) / (self.mw.AR * np.pi * ebar)
+            plt.plot(cl_data, cd_data, "*")
+            plt.plot(cl_data, [check_f(cl) for cl in cl_data])
+            plt.show()
+        return cd0, ebar
 
     def __str__(self):
         return """Weight: {} lbf
@@ -160,26 +219,28 @@ class Plane:
     Engine: {} lbf
     Payload: {} lbf
 CL Max: {} (L/D: {}) 
-Power Req: {} hp
+Power Req: {} hp (Least squares CD0: {}; Oswald e: {})
 X CG: {} ft, X AC: {} ft (from nose) 
     X MW AC: {} ft 
     X HS AC: {} ft
 MW Area: {} ft^2 (MAC: {} ft)
     MW AR: {}
-    MW Span: {} ft 
+    MW Span: {} ft
+    MW CL Alpha: {} /rad 
 HS Area: {} ft^2
     HS AR: {}
     HS Span: {} ft 
+    HS CL Alpha: {} /rad 
         """.format(
             self.dry_weight(),
             self.fuse_weight, self.wing_weight,
             self.flap_weight, self.flap_pct * 100,
             self.tail_weight, self.engine_weight, self.payload,
             self.CLmax(), self.CLmax() / self.CD(self.CLmax()),
-            self.power_req,
+            self.power_req, *self.compute_oswald(),
             self.x_cg_ft, self.x_ac_ft, self.mw_x_ac, self.hs_x_ac,
-            self.mw.area, self.mw.mac(), self.mw.AR, self.mw.span(),
-            self.hs.area, self.hs.AR, self.hs.span()
+            self.mw.area, self.mw.mac(), self.mw.AR, self.mw.span(), self.mw.clalpha(),
+            self.hs.area, self.hs.AR, self.hs.span(), self.hs.clalpha()
         )
 
 
@@ -374,12 +435,10 @@ if __name__ == "__main__":
 
     naca_2412 = WingFoil()
     naca_2412.cd = lambda cl_k: interpolate(cl_k, naca_2412_cl, naca_2412_cd)
-    naca_2412.cl_max = 1
+    naca_2412.cl_max = 0.5
 
     best_plane = None
-    best_fuel_weight = None
-    best_ldc = None
-    best_lde = None
+    best_fuel_burndown = None
     for fpct in [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
         print("FLAP: {}".format(fpct))
         for ar in [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]:
@@ -390,17 +449,34 @@ if __name__ == "__main__":
             plane_0.mw.airfoil = naca_2412
             plane_0.hs.airfoil = naca_2412
             prev_dry_weight = None
-            w_fuel_lbf = 0
             while prev_dry_weight is None or abs(prev_dry_weight - plane_0.dry_weight()) > 10 ** -5:
                 prev_dry_weight = plane_0.dry_weight()
-                w_fuel_lbf, loiter_speed_mph, ldc, lde = fuel_weight(plane_0.dry_weight(), plane_0.CD,
-                                                                     plane_0.mw.area, plane_0.CLmax(), ext_res=True)
-                plane_0.build_optimal_airplane(w_fuel_lbf)
-            if best_fuel_weight is None or best_fuel_weight > w_fuel_lbf:
-                best_fuel_weight = w_fuel_lbf
+                fuel_consumption = fuel_weight(plane_0.dry_weight(), plane_0.CD, plane_0.mw.area, plane_0.CLmax(),
+                                               ext_res=True)
+                plane_0.build_optimal_airplane(fuel_consumption.total_fuel_weight)
+            if best_fuel_burndown is None or best_fuel_burndown.total_fuel_weight > fuel_consumption.total_fuel_weight:
                 best_plane = plane_0
-                best_ldc = ldc
-                best_lde = lde
+                best_fuel_burndown = fuel_consumption
     print(best_plane)
-    print("FUEL WEIGHT: {}".format(best_fuel_weight))
-    print("L/D Cruise: {}, L/D Endurance {}".format(best_ldc, best_lde))
+    print("FUEL WEIGHT: {}".format(best_fuel_burndown.total_fuel_weight))
+    total_weight_lbf = best_fuel_burndown.total_fuel_weight + best_plane.dry_weight()
+    cla = required_clArea(sea_level_density_slugft3, sea_level_min_speed_knots, total_weight_lbf)
+    print("CLA: {}".format(cla))
+    print("CLA/A: {}".format(cla / best_plane.mw.area))
+    print("v min: {} mph (CL max: {})".format(required_airspeed_mph(sea_level_density_slugft3,
+                                                                    best_plane.CLmax() * best_plane.mw.area,
+                                                                    best_fuel_burndown.total_fuel_weight
+                                                                    + best_plane.dry_weight()),
+                                              best_plane.CLmax()))
+    print("L/D Cruise: {}".format(best_fuel_burndown.LoverD_cruise))
+    print("L/D Endurance {} ({} mph, CL: {})".format(best_fuel_burndown.LoverD_loiter, best_fuel_burndown.loiter_speed,
+                                                     best_fuel_burndown.CL_loiter))
+
+    sf = lambda x: str(np.round(x, 3))
+
+    print("Burndown Schedule: (x Positions from nose)")
+    max_fuel = best_fuel_burndown.total_fuel_weight
+    for sm, fw, x_cg, x_ac, label in zip(*best_plane.static_margin_fuel_burndown(best_fuel_burndown),
+                                         ["Pre Taxi", "Pre Cruise", "Pre Loiter", "Pre Landing", "Post Landing"]):
+        print("{}: x cg {} ft, x ac {} ft, sm {}%, w_fuel {} lbf ({}%)".
+              format(label, sf(x_cg), sf(x_ac), sf(sm * 100), sf(fw), sf(fw / max_fuel * 100)))
