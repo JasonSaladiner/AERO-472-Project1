@@ -14,8 +14,8 @@ def readAirfoil(fileName):
                 continue
             if not ready:
                 continue
-            Cl_curve.append(row[1])
-            Cd_curve.append(row[2])
-            print(row)
+            Cl_curve.append(float(row[1]))
+            Cd_curve.append(float(row[2]))
+            #print(row)
     return Cl_curve, Cd_curve
 #print(readAirfoil("n0009.csv"))

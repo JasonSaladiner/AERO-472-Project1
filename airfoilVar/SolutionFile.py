@@ -432,12 +432,14 @@ naca_2412_cd = [0.0266,
                 0.03238]
 
 if __name__ == "__main__":
-    wing_cl_curve, wing_cd_curve = readAirfoil("naca2412.csv")
+    mailWingFoilName = "naca2412.csv"
+    hsWingFoilName = "naca2412.csv"
+    wing_cl_curve, wing_cd_curve = readAirfoil(mailWingFoilName)
     wingAirfoil = WingFoil()
     wingAirfoil.cd = lambda cl_k: interpolate(cl_k, wing_cl_curve, wing_cd_curve)
     wingAirfoil.cl_max = 0.5
 
-    hs_cl_curve, hs_cd_curve = readAirfoil("naca2412.csv")
+    hs_cl_curve, hs_cd_curve = readAirfoil(hsWingFoilName)
     hsAirfoil = WingFoil()
     hsAirfoil.cd = lambda cl_k: interpolate(cl_k, hs_cl_curve, hs_cd_curve)
     hsAirfoil.cl_max = 0.5
@@ -462,6 +464,8 @@ if __name__ == "__main__":
             if best_fuel_burndown is None or best_fuel_burndown.total_fuel_weight > fuel_consumption.total_fuel_weight:
                 best_plane = plane_0
                 best_fuel_burndown = fuel_consumption
+    print(f"Main Airfoil: {mailWingFoilName}")
+    print(f"Horizontal Stabilizer Airfoil: {hsWingFoilName}")
     print(best_plane)
     print("FUEL WEIGHT: {}".format(best_fuel_burndown.total_fuel_weight))
     total_weight_lbf = best_fuel_burndown.total_fuel_weight + best_plane.dry_weight()
